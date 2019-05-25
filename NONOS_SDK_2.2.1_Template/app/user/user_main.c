@@ -26,9 +26,14 @@
 #include "osapi.h"
 #include "driver/uart.h"
 #include "user_interface.h"
+#include "espconn.h"
+#include "mem.h"
 
 os_timer_t os_timer_1; /* have to be global */
 extern u8 DHT11_Data_Array[6];
+struct espconn ST_NetCon; /* for connect network */
+int init_udp = 1;
+
 /******************************************************************************
  * FunctionName : user_rf_cal_sector_set
  * Description  : SDK just reversed 4 sectors, used for rf init data and paramters.
@@ -98,11 +103,53 @@ void ICACHE_FLASH_ATTR delay_ms(u32 time)
 		os_delay_us(1000);
 	}
 }
+void ICACHE_FLASH_ATTR recv_callback(void *arg, char *pdata, unsigned short len)
+{
+	struct espconn *con = arg; /* save tht connect struct */
+	remot_info *info = NULL;
+	//os_printf("receive %s\r\n", pdata);
+
+	if (espconn_get_connection_info(con, &info, 0) == ESPCONN_OK) {
+		con->proto.udp->remote_port = info->remote_port;
+		con->proto.udp->remote_ip[0] = info->remote_ip[0];
+		con->proto.udp->remote_ip[1] = info->remote_ip[1];
+		con->proto.udp->remote_ip[2] = info->remote_ip[2];
+		con->proto.udp->remote_ip[3] = info->remote_ip[3];
+		os_printf("%d.%d.%d.%d\r\n", info->remote_ip[0], info->remote_ip[1], info->remote_ip[2], info->remote_ip[3]);
+	}
+
+	espconn_send(con, "ESP 8266 get it", os_strlen("ESP 8266 get it"));
+}
+void ICACHE_FLASH_ATTR send_callback(void *arg)
+{
+	os_printf("\r\n send OK!\r\n");
+}
+
+int ICACHE_FLASH_ATTR init_udp_client(void)
+{
+	/* init as a server */
+	ST_NetCon.type = ESPCONN_UDP;
+	ST_NetCon.proto.udp = (esp_udp *)os_zalloc(sizeof(esp_udp));
+	if (!ST_NetCon.proto.udp)
+		return -1;
+	ST_NetCon.proto.udp->local_port = 8266 ; /* set local port */
+
+	espconn_regist_sentcb(&ST_NetCon, send_callback);
+	espconn_regist_recvcb(&ST_NetCon, recv_callback);
+
+	espconn_create(&ST_NetCon);/* init udp */
+
+	
+	os_printf("\r\n init udp OK! \r\n");
+	return 0;
+
+}
 void ICACHE_FLASH_ATTR timer1_handle(void)
 {
 	//os_printf("get in tiemr handle\r\n");
 	int status;
 	struct ip_info ip_conf;
+
 	
 	status = wifi_station_get_connect_status();
 	if (status != 5)
@@ -112,6 +159,11 @@ void ICACHE_FLASH_ATTR timer1_handle(void)
 		os_printf("%d.%d.%d.%d\r\n", (ip_conf.ip.addr >> 0) & 0xff,
 				(ip_conf.ip.addr >> 8) & 0xff, (ip_conf.ip.addr >> 16) & 0xff,
 				(ip_conf.ip.addr >> 24) & 0xff);
+	}
+	if (init_udp) {
+		if (!init_udp_client())
+			init_udp--;
+
 	}
 	if(DHT11_Read_Data_Complete() == 0)		// ¶ÁÈ¡DHT11ÎÂÊª¶ÈÖµ
 	{
@@ -186,8 +238,9 @@ user_init(void)
 	
 	os_printf("***********ESP8266 start\r\n");
 	os_printf("SDK version: %s\r\n",	system_get_sdk_version());
+
 	/* start interrupte */
-	PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0);
+	PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0);/* GPIO0 as source */
 	GPIO_DIS_OUTPUT(GPIO_ID_PIN(0)); /* input */
 	
 	ETS_GPIO_INTR_DISABLE();
@@ -205,12 +258,12 @@ user_init(void)
 	/* end soft timer */
 
 	/* set wifi */
-	
-	wifi_set_opmode(STATION_MODE);
+	wifi_set_opmode(STATION_MODE); /* sta mode */
 	memset(&conf, 0, sizeof(struct station_config));
-	strncpy(conf.ssid, "hfs", 3);
+	strncpy(conf.ssid, "hfs", 3); /* ssid */
 	strncpy(conf.password, "12345678", 8);
 	wifi_station_set_config(&conf);
+	/* end wifi*/
 #if 0
 	PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO4_U, FUNC_GPIO4); /* GIO4 output */
 	while (1) {
